@@ -26,6 +26,14 @@ mew + 2 - unusual statstically deviation
 
 machine learning models that use a trading objective perform better than models that estimate a signla with a prediction objective
 
+making your results look good for the backtest is an example of data snooping
+
+a much better optimization is to perform a walk-forward test or out-of-sample test set and conduct changes from there
+
+if test looks much worse than train
+
+thats an example of over-fitting
+
 
 # statstical arbitrage
 

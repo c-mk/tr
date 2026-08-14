@@ -76,7 +76,7 @@ class StrategyConfig:
     # --- Risk management ---
     risk_pct_per_trade: float = 0.01   # fraction of current equity risked per trade (0.01 = 1%)
     point_value: float = field(default=0.0)  # 0 => auto-derived as 1/reference_price (see __post_init__)
-    max_drawdown_pct: float = 0.05   # kill switch: halt new entries if drawdown from equity peak exceeds this
+    max_drawdown_pct: float = 0.10     # kill switch: halt new entries if drawdown from equity peak exceeds this
     starting_equity: float = 10_000.0
 
     def __post_init__(self):
@@ -488,6 +488,40 @@ class SpreadBacktester:
         return self.summary()
 
     # -----------------------------------------------------------------
+    def performance_stats(self, periods_per_year: int = 252) -> dict:
+        """
+        Sharpe and Sortino computed on DAILY-resampled equity returns
+        (not per-trade or per-minute returns -- those overstate significance
+        for a strategy trading dozens of times a day). Annualized assuming
+        ~252 trading days/year.
+
+        Sharpe: mean(daily_return) / std(daily_return) * sqrt(252)
+        Sortino: same, but denominator only uses the std of NEGATIVE daily
+        returns (downside deviation) -- doesn't penalize upside volatility.
+        """
+        if self.equity_df.empty:
+            return {"sharpe": None, "sortino": None}
+
+        daily_equity = self.equity_df["equity"].resample("1D").last().dropna()
+        daily_returns = daily_equity.pct_change().dropna()
+
+        if len(daily_returns) < 2 or daily_returns.std() == 0:
+            return {"sharpe": None, "sortino": None, "note": "not enough daily variation to compute"}
+
+        sharpe = daily_returns.mean() / daily_returns.std() * np.sqrt(periods_per_year)
+
+        downside = daily_returns[daily_returns < 0]
+        if len(downside) == 0 or downside.std() == 0:
+            sortino = None  # no downside days in this window -- can't compute
+        else:
+            sortino = daily_returns.mean() / downside.std() * np.sqrt(periods_per_year)
+
+        return {
+            "sharpe": sharpe,
+            "sortino": sortino,
+            "n_daily_obs": len(daily_returns),
+        }
+
     def summary(self) -> dict:
         if not self.trades:
             return {"trades": 0, "message": "No trades triggered."}
@@ -496,7 +530,7 @@ class SpreadBacktester:
         eq = self.equity_df["equity"]
         running_max = eq.cummax()
         dd = (running_max - eq) / running_max
-        return {
+        stats = {
             "trades": len(self.trades),
             "win_rate_pct": 100 * len(wins) / len(pnl),
             "total_net_pnl": sum(pnl),
@@ -506,6 +540,8 @@ class SpreadBacktester:
             "halted_by_kill_switch": self.halted_at is not None,
             "halted_at": self.halted_at,
         }
+        stats.update(self.performance_stats())
+        return stats
 
     def trades_frame(self) -> pd.DataFrame:
         return pd.DataFrame([t.__dict__ for t in self.trades])
@@ -544,6 +580,75 @@ class SpreadBacktester:
 # Example run
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Out-of-sample / walk-forward testing
+# ---------------------------------------------------------------------------
+
+def train_test_split_test(data: pd.DataFrame, cfg: StrategyConfig, train_frac: float = 0.5) -> dict:
+    """
+    Splits the data chronologically into an in-sample ("train") window and
+    an out-of-sample ("test") window, then runs the SAME frozen cfg
+    (no re-tuning) on each independently. This is the direct check for the
+    trap from before: does a threshold/config that looks good on one window
+    still look good on a DIFFERENT window it wasn't picked to flatter?
+
+    Returns {"train": (backtester, stats), "test": (backtester, stats)}.
+    """
+    split_idx = int(len(data) * train_frac)
+    train_data = data.iloc[:split_idx]
+    test_data = data.iloc[split_idx:]
+
+    bt_train = SpreadBacktester(train_data, cfg)
+    stats_train = bt_train.run()
+
+    bt_test = SpreadBacktester(test_data, cfg)
+    stats_test = bt_test.run()
+
+    return {"train": (bt_train, stats_train), "test": (bt_test, stats_test)}
+
+
+def walk_forward_test(data: pd.DataFrame, cfg: StrategyConfig, n_folds: int = 6, compound: bool = True) -> dict:
+    """
+    Splits data into n_folds sequential, non-overlapping, chronological
+    windows and runs the SAME frozen cfg (no re-tuning between folds) on
+    each one, in order. This is the real test of robustness: a strategy
+    with genuine edge should perform reasonably (even if not identically)
+    across most folds, not just the one window you happened to tune on.
+
+    compound=True: each fold's starting equity = previous fold's ending
+    equity (mimics actually trading straight through time).
+    compound=False: every fold restarts at cfg.starting_equity (cleaner
+    for comparing per-fold performance without earlier folds' luck bleeding in).
+
+    Returns {"fold_stats": DataFrame, "backtesters": [SpreadBacktester, ...]}
+    """
+    fold_size = len(data) // n_folds
+    fold_stats = []
+    backtesters = []
+    running_equity = cfg.starting_equity
+
+    for i in range(n_folds):
+        start = i * fold_size
+        end = len(data) if i == n_folds - 1 else (i + 1) * fold_size
+        fold_data = data.iloc[start:end]
+        if len(fold_data) < cfg.lookback_bars // 4:
+            continue  # skip folds too short to compute meaningful mu/sigma
+
+        fold_cfg = StrategyConfig(**{**cfg.__dict__, "starting_equity": running_equity if compound else cfg.starting_equity})
+        bt = SpreadBacktester(fold_data, fold_cfg)
+        stats = bt.run()
+        stats["fold"] = i + 1
+        stats["fold_start"] = fold_data.index.min()
+        stats["fold_end"] = fold_data.index.max()
+        fold_stats.append(stats)
+        backtesters.append(bt)
+
+        if compound:
+            running_equity = stats["ending_equity"]
+
+    return {"fold_stats": pd.DataFrame(fold_stats), "backtesters": backtesters}
+
+
 if __name__ == "__main__":
     # Optional: calibrate slippage against HyperLiquid's LIVE order book for
     # the notional sizes you'd actually trade. Requires network access to
@@ -563,17 +668,17 @@ if __name__ == "__main__":
         exit_sigma=0.0,
         stop_sigma_extra=1.0,
         risk_pct_per_trade=0.01,     # risk 1% of equity per trade
-        max_drawdown_pct=0.05,       # halt new entries after 10% drawdown from peak
+        max_drawdown_pct=0.10,       # halt new entries after 10% drawdown from peak
         order_type="market",         # market/taker: guarantees fill, costs more per side (recommended -- see notes above)
-        # point_value left at 0 -> auto=-derived as 1/reference_price (dollar-notional-matched legs)
+        # point_value left at 0 -> auto-derived as 1/reference_price (dollar-notional-matched legs)
         rolling=False,               # False = static mu/sigma over the whole window, matching the PDF exactly
     )
 
     # Real run against your MT5 export + live HyperLiquid REST pull:
-    data = load_price_data(
-          mt5_csv_path="USDJPYM1.csv",
-          hl_coin="xyz:JPY",
-           hl_interval="1m",)
+    #   data = load_price_data(
+    #       mt5_csv_path="/mnt/user-data/uploads/USDJPYM1.csv",
+    #       hl_coin="xyz:JPY",
+    #       hl_interval="1m",
     #       mt5_tz=None,   # set your broker's server timezone if known, e.g. "Etc/GMT-3"
     #   )
     # Falls back to synthetic data when no CSV path is given, so this file
@@ -588,6 +693,7 @@ if __name__ == "__main__":
 
     print("\n=== Trades (first 10) ===")
     print(bt.trades_frame().head(10))
-
-    bt.plot(save_path="spread_backtest_plot.png")
-    print("\nPlot saved")
+'''œ
+    bt.plot(save_path="/mnt/user-data/outputs/spread_backtest_plot.png")
+    print("\nPlot saved to /mnt/user-data/outputs/spread_backtest_plot.png")
+    '''
