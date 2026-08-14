@@ -320,7 +320,7 @@ def build_slippage_curve(coin: str, notional_points: list) -> dict:
 def load_price_data(
     mt5_csv_path: Optional[str] = None,
     hl_coin: str = "xyz:JPY",
-    hl_interval: str = "1m",
+    hl_interval: str = "5m",
     mt5_tz: Optional[str] = None,
 ) -> pd.DataFrame:
     """
@@ -356,7 +356,7 @@ def _generate_sample_data(n_bars: int = 3441, seed: int = 42) -> pd.DataFrame:
     loosely shaped like the JPY example in the report, purely for testing
     the engine's mechanics."""
     rng = np.random.default_rng(seed)
-    t = pd.date_range("2026-08-11 07:26", periods=n_bars, freq="1min", tz="UTC")
+    t = pd.date_range("2026-08-11 07:26", periods=n_bars, freq="5min", tz="UTC")
 
     base = 159.0 + np.cumsum(rng.normal(0, 0.01, n_bars))
 
@@ -523,17 +523,36 @@ class SpreadBacktester:
         }
 
     def summary(self) -> dict:
-        if not self.trades:
-            return {"trades": 0, "message": "No trades triggered."}
-        pnl = [t.net_pnl for t in self.trades]
-        wins = [p for p in pnl if p > 0]
-        eq = self.equity_df["equity"]
+        eq = self.equity_df["equity"] if not self.equity_df.empty else pd.Series([self.cfg.starting_equity])
         running_max = eq.cummax()
         dd = (running_max - eq) / running_max
+
+        if not self.trades:
+            stats = {
+                "trades": 0,
+                "win_rate_pct": 0.0,
+                "total_gross_pnl": 0.0,
+                "total_net_pnl": 0.0,
+                "total_commission": 0.0,
+                "avg_trade": 0.0,
+                "max_drawdown_pct": dd.max() * 100 if len(dd) else 0.0,
+                "ending_equity": eq.iloc[-1],
+                "halted_by_kill_switch": self.halted_at is not None,
+                "halted_at": self.halted_at,
+            }
+            stats.update(self.performance_stats())
+            return stats
+
+        pnl = [t.net_pnl for t in self.trades]
+        gross = [t.gross_pnl for t in self.trades]
+        commission = [t.commission for t in self.trades]
+        wins = [p for p in pnl if p > 0]
         stats = {
             "trades": len(self.trades),
             "win_rate_pct": 100 * len(wins) / len(pnl),
+            "total_gross_pnl": sum(gross),
             "total_net_pnl": sum(pnl),
+            "total_commission": sum(commission),
             "avg_trade": sum(pnl) / len(pnl),
             "max_drawdown_pct": dd.max() * 100,
             "ending_equity": eq.iloc[-1],
@@ -693,7 +712,6 @@ if __name__ == "__main__":
 
     print("\n=== Trades (first 10) ===")
     print(bt.trades_frame().head(10))
-'''œ
-    bt.plot(save_path="/mnt/user-data/outputs/spread_backtest_plot.png")
-    print("\nPlot saved to /mnt/user-data/outputs/spread_backtest_plot.png")
-    '''
+
+    bt.plot(save_path=" spread_backtest_plot.png")
+    print("spread_backtest_plot.png")
