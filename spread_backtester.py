@@ -76,7 +76,7 @@ class StrategyConfig:
     # --- Risk management ---
     risk_pct_per_trade: float = 0.01   # fraction of current equity risked per trade (0.01 = 1%)
     point_value: float = field(default=0.0)  # 0 => auto-derived as 1/reference_price (see __post_init__)
-    max_drawdown_pct: float = 0.10     # kill switch: halt new entries if drawdown from equity peak exceeds this
+    max_drawdown_pct: float = 0.05   # kill switch: halt new entries if drawdown from equity peak exceeds this
     starting_equity: float = 10_000.0
 
     def __post_init__(self):
@@ -563,7 +563,7 @@ if __name__ == "__main__":
         exit_sigma=0.0,
         stop_sigma_extra=1.0,
         risk_pct_per_trade=0.01,     # risk 1% of equity per trade
-        max_drawdown_pct=0.10,       # halt new entries after 10% drawdown from peak
+        max_drawdown_pct=0.05,       # halt new entries after 10% drawdown from peak
         order_type="market",         # market/taker: guarantees fill, costs more per side (recommended -- see notes above)
         # point_value left at 0 -> auto=-derived as 1/reference_price (dollar-notional-matched legs)
         rolling=False,               # False = static mu/sigma over the whole window, matching the PDF exactly
