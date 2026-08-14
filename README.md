@@ -24,7 +24,7 @@ sigma (std dev) - how much the spread typically deviates from mew
 mew + 1 - normal distribution
 mew + 2 - unusual statstically deviation
 
-machine learning models that use a trading objective perform better than models that estimate a signla with a prediction objective
+machine learning models that use a trading objective perform better than models that estimate a signal with a prediction objective
 
 making your results look good for the backtest is an example of data snooping
 
@@ -33,6 +33,8 @@ a much better optimization is to perform a walk-forward test or out-of-sample te
 if test looks much worse than train
 
 thats an example of over-fitting
+
+A residual is simply the error—the difference between reality and the prediction made by the regression line.
 
 
 # statstical arbitrage
