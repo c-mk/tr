@@ -137,6 +137,65 @@ def plot_volume_at_extension(results, df):
 
 
 # ---------------------------------------------------------------------------
+# 3b. LEAD/LAG: does volume rise BEFORE a drop into extreme negative territory,
+#     or only AT THE SAME TIME as the drop? This distinguishes a genuinely
+#     predictive signal from a purely descriptive/coincident one.
+# ---------------------------------------------------------------------------
+def analyze_volume_lead_lag(df, extension_threshold=-2.0, max_lag=5):
+    df = df.copy()
+    df["volume_ratio"] = df["Volume"] / df["Volume"].rolling(63).mean()
+
+    # baseline: what volume_ratio looks like on a random/typical day
+    baseline = df["volume_ratio"].mean()
+
+    # find the FIRST day of each distinct move beyond the threshold
+    # (avoid counting the same multi-day crash event over and over)
+    is_extreme = df["price_z"] < extension_threshold
+    event_start = is_extreme & (~is_extreme.shift(1).fillna(False))
+    event_dates = df.index[event_start]
+
+    print(f"\n--- Volume Lead/Lag Around Moves Beyond {extension_threshold}std ---")
+    print(f"Number of distinct events: {len(event_dates)}")
+    print(f"Baseline (typical day) volume ratio: {baseline:.3f}\n")
+
+    lag_results = {}
+    for lag in range(max_lag, -1, -1):  # from 5 days BEFORE down to the event day itself
+        vals = []
+        for d in event_dates:
+            loc = df.index.get_loc(d)
+            target_loc = loc - lag
+            if target_loc >= 0:
+                vals.append(df["volume_ratio"].iloc[target_loc])
+        if vals:
+            avg_ratio = np.mean(vals)
+            lag_results[lag] = avg_ratio
+            tag = "(event day)" if lag == 0 else f"({lag} day(s) before)"
+            print(f"Lag -{lag:<2} {tag:<20} avg volume ratio: {avg_ratio:.3f}  "
+                  f"({(avg_ratio/baseline - 1)*100:+.1f}% vs typical day)")
+
+    return lag_results, baseline
+
+
+def plot_volume_lead_lag(lag_results, baseline, threshold):
+    lags = sorted(lag_results.keys(), reverse=True)
+    vals = [lag_results[l] for l in lags]
+    x_labels = [f"-{l}d" if l > 0 else "Event day" for l in lags]
+
+    fig, ax = plt.subplots(figsize=(10, 5.5))
+    ax.plot(x_labels, vals, marker="o", linewidth=2, color="firebrick")
+    ax.axhline(baseline, color="gray", linestyle="--", label="Typical day (baseline)")
+    ax.set_title(f"Volume Ratio Before/During Moves Beyond {threshold}std from VWAP")
+    ax.set_ylabel("Volume vs. 63-day average (ratio)")
+    ax.set_xlabel("Days relative to the extreme move")
+    ax.legend()
+    ax.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.savefig("spy_volume_lead_lag.png", dpi=150)
+    print("\nSaved chart: spy_volume_lead_lag.png")
+    plt.show()
+
+
+# ---------------------------------------------------------------------------
 # 4. VOLUME-CONFIRMED TREND SIGNAL
 # ---------------------------------------------------------------------------
 def generate_signals(df, ma_short=MA_SHORT, ma_long=MA_LONG):
@@ -289,6 +348,9 @@ if __name__ == "__main__":
     vol_results = analyze_volume_at_extension(vwap_df)
     plot_volume_at_extension(vol_results, vwap_df)
     plot_price_vwap_bands(vwap_df)
+
+    lag_results, baseline = analyze_volume_lead_lag(vwap_df, extension_threshold=-2.0, max_lag=5)
+    plot_volume_lead_lag(lag_results, baseline, threshold=-2.0)
 
     signaled = generate_signals(vwap_df)
     with_vol = compute_volatility(signaled)
