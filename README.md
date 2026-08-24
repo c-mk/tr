@@ -74,3 +74,10 @@ fade at 2sigma, exit at the mean symetrically
 wherew 1 std bands are used as early warning zones or a tighter more agressive variant
 
 a spread can open up between the two acssets because one is crupto wrapper for a real-world FX pair but the other asset is from a real-referenced price
+
+# aug 24
+
+interest; RL in trading settings
+notes; things are coming together now in this eclectic mash-up of harmonic intelligence
+peak6 sent due-in-seven-days online assessment in hackerrank
+doing goldman sachs right now (no other time exist)
